@@ -67,6 +67,15 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
+  }else if(r_scause()==15||r_scause()==13) { 
+    uint64 va=r_stval();//获取产生页面错误的虚拟地址
+    //判断是不是cow页面错误
+    //分配内存
+   if(va>=p->sz||cowpage(p->pagetable,va)!=0||cowalloc(p->pagetable,PGROUNDDOWN(va))==0){
+    p->killed=1;
+   }
+    
+    
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
