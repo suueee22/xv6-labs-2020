@@ -374,33 +374,62 @@ iunlockput(struct inode *ip)
 
 // Return the disk block address of the nth block in inode ip.
 // If there is no such block, bmap allocates one.
+//返回索引bn的磁盘快地址，尚未分配，则分配新的块
 static uint
 bmap(struct inode *ip, uint bn)
 {
   uint addr, *a;
-  struct buf *bp;
-
+  struct buf *bp;//缓冲区指针
+  //小于直接块的数量
   if(bn < NDIRECT){
     if((addr = ip->addrs[bn]) == 0)
+    //如果没分配，就分配一个
       ip->addrs[bn] = addr = balloc(ip->dev);
     return addr;
   }
-  bn -= NDIRECT;
-
+  bn -= NDIRECT;//减去直接块的数量
+  //处理间接块
   if(bn < NINDIRECT){
     // Load indirect block, allocating if necessary.
     if((addr = ip->addrs[NDIRECT]) == 0)
       ip->addrs[NDIRECT] = addr = balloc(ip->dev);
-    bp = bread(ip->dev, addr);
-    a = (uint*)bp->data;
+    bp = bread(ip->dev, addr);//读间接块的内容到缓冲区
+    a = (uint*)bp->data;//缓冲区的数据转化成指针
+    //检查间接块中对应的逻辑块号是否分配物理课
     if((addr = a[bn]) == 0){
       a[bn] = addr = balloc(ip->dev);
-      log_write(bp);
+      log_write(bp);//记录对间接块的修改
     }
     brelse(bp);
     return addr;
   }
+  bn-=NINDIRECT;
 
+  if(bn<NDOUBLYINDIRECT){
+    //获取二级间接地址
+    if((addr=ip->addrs[NDIRECT+1])==0)
+       ip->addrs[NDIRECT+1]=addr=balloc(ip->dev);
+    bp=bread(ip->dev,addr);//获取二级间接块的数据
+    a=(uint*)bp->data;
+    //一级间接块是否分配块，addr是一级间接块地址
+    if((addr=a[bn/NINDIRECT])==0){
+      a[bn/NINDIRECT]=addr=balloc(ip->dev);
+      log_write(bp);
+    }
+     brelse(bp);
+     bp=bread(ip->dev,addr);//获取一级间接块数据
+    a=(uint*)bp->data;
+    bn%=NINDIRECT;
+    //获取 直接块的地址
+    if((addr=a[bn])==0){
+      a[bn]=addr=balloc(ip->dev);
+      log_write(bp);
+    }
+     brelse(bp);
+    return addr;
+
+  }
+  
   panic("bmap: out of range");
 }
 
@@ -409,9 +438,9 @@ bmap(struct inode *ip, uint bn)
 void
 itrunc(struct inode *ip)
 {
-  int i, j;
-  struct buf *bp;
-  uint *a;
+  int i, j,k;
+  struct buf *bp,*bp2;
+  uint *a,*b;
 
   for(i = 0; i < NDIRECT; i++){
     if(ip->addrs[i]){
@@ -431,6 +460,29 @@ itrunc(struct inode *ip)
     bfree(ip->dev, ip->addrs[NDIRECT]);
     ip->addrs[NDIRECT] = 0;
   }
+
+  if(ip->addrs[NDIRECT+1]){
+    bp = bread(ip->dev, ip->addrs[NDIRECT+1]);
+    a = (uint*)bp->data;
+    for(j = 0; j < NINDIRECT; ++j){
+      if(a[j]){
+        bp2 = bread(ip->dev,a[j]);
+       b = (uint*)bp->data;  
+      for(k=0;k<NINDIRECT;k++){
+        if (b[k]){
+        {bfree(ip->dev,b[k]);}
+        brelse(bp2);
+       bfree(ip->dev, b[k]);
+      }}
+      brelse(bp2);
+        bfree(ip->dev, a[j]);
+        a[j]=0;
+    }}
+    brelse(bp);
+    bfree(ip->dev, ip->addrs[NDIRECT+1]);
+    ip->addrs[NDIRECT+1] = 0;
+  }
+
 
   ip->size = 0;
   iupdate(ip);
